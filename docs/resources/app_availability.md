@@ -6,7 +6,8 @@ description: |-
   Manages the storefronts an app is sold in.
   This is the other half of App Store Connect's Pricing and Availability page; apple_app_price_schedule is the price. Unlike an in-app purchase's or a subscription's availability, which carry a flat list of territory codes, an app's carries a record per storefront — each with its own release date and pre-order setting.
   available_in_new_territories covers only storefronts Apple opens later, so it is no substitute for naming the current ones. To sell everywhere, pass data.apple_territories.all.ids.
-  ~> This resource cannot be destroyed. Apple publishes neither PATCH nor DELETE for an app availability: a change is a POST that supersedes the previous record, and there is no way to return an app to having no availability at all. terraform destroy drops it from state and warns. To stop selling in a territory, remove it from territories — that is a normal in-place update.
+  Existing storefronts are updated through PATCH /v1/territoryAvailabilities/{id}. Apple's published API cannot update available_in_new_territories on an existing record; change that setting in App Store Connect before applying.
+  ~> This resource cannot be destroyed. There is no way to return an app to having no availability at all. terraform destroy drops it from state and warns. To stop selling in a territory, remove it from territories — that is a normal in-place update.
 ---
 
 # apple_app_availability (Resource)
@@ -17,7 +18,9 @@ This is the other half of App Store Connect's *Pricing and Availability* page; `
 
 `available_in_new_territories` covers only storefronts Apple opens **later**, so it is no substitute for naming the current ones. To sell everywhere, pass `data.apple_territories.all.ids`.
 
-~> **This resource cannot be destroyed.** Apple publishes neither `PATCH` nor `DELETE` for an app availability: a change is a `POST` that supersedes the previous record, and there is no way to return an app to having no availability at all. `terraform destroy` drops it from state and warns. To stop selling in a territory, remove it from `territories` — that is a normal in-place update.
+Existing storefronts are updated through `PATCH /v1/territoryAvailabilities/{id}`. Apple's published API cannot update `available_in_new_territories` on an existing record; change that setting in App Store Connect before applying.
+
+~> **This resource cannot be destroyed.** There is no way to return an app to having no availability at all. `terraform destroy` drops it from state and warns. To stop selling in a territory, remove it from `territories` — that is a normal in-place update.
 
 ## Example Usage
 
@@ -81,7 +84,7 @@ resource "apple_app_availability" "staggered" {
 
 ### Read-Only
 
-- `id` (String) The unique Apple-generated identifier for the availability record. Apple issues a new one every time availability is replaced.
+- `id` (String) The unique Apple-generated identifier for the availability record.
 
 <a id="nestedatt--territories"></a>
 ### Nested Schema for `territories`

@@ -91,11 +91,75 @@ func (c *Client) GetAppAvailabilityWithTerritories(appID string) (*models.AppAva
 	return availability, territories, nil
 }
 
+// SetAppAvailability creates availability or reconciles existing storefronts.
+func (c *Client) SetAppAvailability(appID string, newTerritories bool, desired []AppTerritoryAvailability, authToken *string) (*models.AppAvailability, error) {
+	availability, err := c.GetAppAvailability(appID)
+	if err != nil {
+		if strings.Contains(err.Error(), "availability not found for app") {
+			return c.CreateAppAvailability(appID, newTerritories, desired, authToken)
+		}
+		return nil, err
+	}
+	if availability.Attributes.AvailableInNewTerritories == nil || *availability.Attributes.AvailableInNewTerritories != newTerritories {
+		return nil, fmt.Errorf("availableInNewTerritories cannot be updated through Apple's published API; change it in App Store Connect first")
+	}
+	current, err := c.GetAppTerritoryAvailabilities(availability.ID)
+	if err != nil {
+		return nil, err
+	}
+	byCode := make(map[string]models.TerritoryAvailability, len(current))
+	for _, territory := range current {
+		if territory.Relationships == nil || territory.Relationships.Territory == nil {
+			return nil, fmt.Errorf("territory availability %q has no territory relationship", territory.ID)
+		}
+		byCode[territory.Relationships.Territory.Data.ID] = territory
+	}
+	wanted := make(map[string]AppTerritoryAvailability, len(desired))
+	for _, territory := range desired {
+		if _, ok := byCode[territory.Territory]; !ok {
+			return nil, fmt.Errorf("no existing territory availability for %q", territory.Territory)
+		}
+		wanted[territory.Territory] = territory
+	}
+	for _, existing := range current {
+		code := existing.Relationships.Territory.Data.ID
+		target, ok := wanted[code]
+		available := ok
+		attrs := models.TerritoryAvailabilityInlineCreateAttributes{}
+		if existing.Attributes.Available == nil || *existing.Attributes.Available != available {
+			attrs.Available = &available
+		}
+		if ok {
+			if target.ReleaseDate != nil && (existing.Attributes.ReleaseDate == nil || *target.ReleaseDate != *existing.Attributes.ReleaseDate) {
+				attrs.ReleaseDate = target.ReleaseDate
+			}
+			if target.PreOrderEnabled != nil && (existing.Attributes.PreOrderEnabled == nil || *target.PreOrderEnabled != *existing.Attributes.PreOrderEnabled) {
+				attrs.PreOrderEnabled = target.PreOrderEnabled
+			}
+		}
+		if attrs.Available == nil && attrs.ReleaseDate == nil && attrs.PreOrderEnabled == nil {
+			continue
+		}
+		// PATCH accepts attributes only, not the create-only territory relationship.
+		rb, err := json.Marshal(map[string]interface{}{"data": map[string]interface{}{"type": "territoryAvailabilities", "id": existing.ID, "attributes": attrs}})
+		if err != nil {
+			return nil, err
+		}
+		req, err := http.NewRequest("PATCH", fmt.Sprintf("%s/v1/territoryAvailabilities/%s", c.HostURL, url.PathEscape(existing.ID)), strings.NewReader(string(rb)))
+		if err != nil {
+			return nil, err
+		}
+		if _, err := c.doRequest(req, authToken); err != nil {
+			return nil, fmt.Errorf("updating territory %s: %w", code, err)
+		}
+	}
+	return availability, nil
+}
+
 // CreateAppAvailability sets the storefronts an app is sold in.
 //
-// This is a replace, not an append. Apple publishes neither PATCH nor DELETE
-// for an app availability: posting a new one supersedes the old one, and there
-// is no way to return an app to having no availability at all.
+// POST is only for initial creation. Existing storefronts must be updated
+// through their territoryAvailabilities records.
 //
 // The territory records travel inline under placeholder IDs, the same shape the
 // price schedule uses.

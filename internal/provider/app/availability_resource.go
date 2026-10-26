@@ -56,17 +56,18 @@ func (r *appAvailabilityResource) Schema(_ context.Context, _ resource.SchemaReq
 			"`available_in_new_territories` covers only storefronts Apple opens **later**, so it is no " +
 			"substitute for naming the current ones. To sell everywhere, pass " +
 			"`data.apple_territories.all.ids`.\n\n" +
-			"~> **This resource cannot be destroyed.** Apple publishes neither `PATCH` nor `DELETE` for " +
-			"an app availability: a change is a `POST` that supersedes the previous record, and there " +
-			"is no way to return an app to having no availability at all. `terraform destroy` drops it " +
+			"Existing storefronts are updated through `PATCH /v1/territoryAvailabilities/{id}`. " +
+			"Apple's published API cannot update `available_in_new_territories` on an existing record; " +
+			"change that setting in App Store Connect before applying.\n\n" +
+			"~> **This resource cannot be destroyed.** There is no way to return an app to having " +
+			"no availability at all. `terraform destroy` drops it " +
 			"from state and warns. To stop selling in a territory, remove it from `territories` — that " +
 			"is a normal in-place update.",
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				MarkdownDescription: "The unique Apple-generated identifier for the availability record. " +
-					"Apple issues a new one every time availability is replaced.",
-				Computed: true,
+				MarkdownDescription: "The unique Apple-generated identifier for the availability record.",
+				Computed:            true,
 			},
 			"app_id": schema.StringAttribute{
 				MarkdownDescription: "The Apple ID of the app. Cannot be changed.",
@@ -180,11 +181,7 @@ func (r *appAvailabilityResource) Read(ctx context.Context, req resource.ReadReq
 	resp.Diagnostics.Append(diags...)
 }
 
-// Update replaces the availability record.
-//
-// Apple publishes no PATCH: posting a new availability for the same app
-// supersedes the old one, which is the semantics Terraform wants for an
-// in-place update.
+// Update reconciles the existing storefront records.
 func (r *appAvailabilityResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	tflog.Info(ctx, "Updating app availability resource")
 
@@ -229,11 +226,7 @@ func (r *appAvailabilityResource) Delete(ctx context.Context, req resource.Delet
 	})
 }
 
-// ModifyPlan marks the ID unknown whenever anything else changes.
-//
-// Apple replaces the record rather than patching it, and issues a new ID each
-// time. Without this the plan would predict the old ID and the framework would
-// reject the apply result as inconsistent.
+// ModifyPlan leaves the ID unresolved until the availability has been read.
 func (r *appAvailabilityResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
 		return
@@ -295,7 +288,7 @@ func (r *appAvailabilityResource) ImportState(ctx context.Context, req resource.
 	resp.Diagnostics.Append(diags...)
 }
 
-// write posts the availability and records the ID Apple issued.
+// write reconciles availability and records its ID.
 func (r *appAvailabilityResource) write(ctx context.Context, plan *appAvailabilityModel, diags *diag.Diagnostics) {
 	appID := plan.AppID.ValueString()
 	ctx = tflog.SetField(ctx, "app_id", appID)
@@ -320,7 +313,7 @@ func (r *appAvailabilityResource) write(ctx context.Context, plan *appAvailabili
 		"territory_count": len(territories),
 	})
 
-	availability, err := r.client.CreateAppAvailability(
+	availability, err := r.client.SetAppAvailability(
 		appID,
 		plan.AvailableInNewTerritories.ValueBool(),
 		territories,
